@@ -1,24 +1,24 @@
 # Display Switcher
 
-Automatically switches the primary display on macOS when you tilt your MacBook lid down.
+Автоматически переключает основной дисплей на macOS, когда наклоняешь крышку MacBook.
 
-**Lid below threshold** → external monitor becomes primary, built-in brightness set to 0, Dock moves.
-**Lid above threshold** → MacBook becomes primary, brightness restored, Dock moves back.
+**Крышка ниже порога** → внешний монитор становится основным, яркость встроенного экрана обнуляется, Dock переезжает.
+**Крышка выше порога** → MacBook становится основным, яркость восстанавливается, Dock возвращается.
 
-Falls back to brightness-based detection on Macs without a lid angle sensor.
+На маках без датчика угла крышки работает fallback по яркости экрана.
 
-## Compatibility
+## Совместимость
 
-**Lid angle sensor** works on:
-- MacBook Pro 14"/16" (2021–2024, M1 Pro/Max through M4 Max)
+**Датчик угла крышки** работает на:
+- MacBook Pro 14"/16" (2021–2024, M1 Pro/Max — M4 Max)
 - MacBook Air M2 (2022), M4 (2025)
 - MacBook Pro 16" (2019, Intel)
 
-**Brightness fallback** works on any MacBook with an external display.
+**Fallback по яркости** работает на любом MacBook с внешним монитором.
 
-Requires macOS 14+ and an external monitor connected.
+Требуется macOS 14+ и подключённый внешний монитор.
 
-## Install
+## Установка
 
 ```bash
 git clone https://github.com/n1x9s/display-switcher.git
@@ -27,21 +27,21 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installer will:
-1. Install `displayplacer` via Homebrew (if missing)
-2. Compile Swift helpers (lid angle sensor + brightness reader)
-3. Test that sensors work on your Mac
-4. Set up a background service (LaunchAgent)
+Установщик:
+1. Установит `displayplacer` через Homebrew (если нет)
+2. Скомпилирует Swift-хелперы (датчик крышки + чтение яркости)
+3. Проверит, что сенсоры работают на твоём маке
+4. Настроит фоновый сервис (LaunchAgent)
 
-## Configuration
+## Настройка
 
-Edit `~/.config/display-switcher/switch.py`:
+Отредактируй `~/.config/display-switcher/switch.py`:
 
 ```python
-LID_ANGLE_THRESHOLD = 60  # degrees — below this, switch to external
+LID_ANGLE_THRESHOLD = 60  # градусы — ниже этого значения переключается на внешний
 ```
 
-After editing, restart the service:
+После изменения перезапусти сервис:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.display-switcher.plist
 launchctl load ~/Library/LaunchAgents/com.display-switcher.plist
@@ -49,44 +49,44 @@ launchctl load ~/Library/LaunchAgents/com.display-switcher.plist
 
 ## Raycast
 
-Script commands are in the `raycast/` folder:
-- **Switch Display by Lid/Brightness** — manual one-shot switch
-- **Start Display Monitor** — start background service
-- **Stop Display Monitor** — stop background service
+Скрипты в папке `raycast/`:
+- **Switch Display by Lid/Brightness** — ручное переключение
+- **Start Display Monitor** — запуск фонового мониторинга
+- **Stop Display Monitor** — остановка мониторинга
 
-Add `raycast/` directory in **Raycast → Settings → Extensions → Script Commands → Add Directory**.
+Добавь папку `raycast/` в **Raycast → Settings → Extensions → Script Commands → Add Directory**.
 
-## Manual usage
+## Ручное использование
 
 ```bash
-# Check lid angle
+# Узнать угол крышки
 ~/.config/display-switcher/lid-angle
 
-# Check brightness
+# Узнать яркость
 ~/.config/display-switcher/brightness-helper
 
-# Run once (check & switch if needed)
+# Запустить один раз (проверить и переключить если нужно)
 python3 ~/.config/display-switcher/switch.py
 
-# Start/stop background monitor
+# Запуск/остановка фонового мониторинга
 launchctl load ~/Library/LaunchAgents/com.display-switcher.plist
 launchctl unload ~/Library/LaunchAgents/com.display-switcher.plist
 ```
 
-## Uninstall
+## Удаление
 
 ```bash
 chmod +x uninstall.sh
 ./uninstall.sh
 ```
 
-## How it works
+## Как это работает
 
-1. **lid-angle** — Swift CLI that reads the HID lid angle sensor (Apple VendorID 0x05AC, ProductID 0x8104) via IOKit
-2. **brightness-helper** — Swift CLI that reads built-in display brightness via DisplayServices private framework
-3. **switch.py** — Python script that polls every 2 seconds, compares lid angle (or brightness) against threshold, and calls `displayplacer` to reconfigure which display is primary
-4. The Dock is restarted (`killall Dock`) after each switch so it moves to the new primary display immediately
+1. **lid-angle** — Swift CLI, читает HID-датчик угла крышки (Apple VendorID 0x05AC, ProductID 0x8104) через IOKit
+2. **brightness-helper** — Swift CLI, читает яркость встроенного экрана через приватный фреймворк DisplayServices
+3. **switch.py** — Python-скрипт, каждые 2 секунды проверяет угол крышки (или яркость), сравнивает с порогом и вызывает `displayplacer` для переключения основного дисплея
+4. После переключения перезапускается Dock (`killall Dock`), чтобы он сразу переехал на новый основной экран
 
 ## Credits
 
-Lid angle sensor reading based on [LidAngleSensor](https://github.com/samhenrigold/LidAngleSensor) by Sam Henri Gold.
+Чтение датчика угла крышки основано на [LidAngleSensor](https://github.com/samhenrigold/LidAngleSensor) by Sam Henri Gold.
