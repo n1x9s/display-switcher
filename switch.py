@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Switches primary display based on MacBook lid angle or brightness.
-- Lid angle below threshold (nearly closed) → set brightness to 0, external becomes primary
-- Lid angle above threshold → restore brightness, MacBook becomes primary
+- Lid angle below threshold → built-in screen disabled entirely, external becomes primary
+- Lid angle above threshold → built-in screen re-enabled and becomes primary
 - Fallback: if lid sensor unavailable, uses brightness directly
 """
 
@@ -42,29 +42,6 @@ def get_lid_angle():
         return -1
 
 
-def set_brightness(value):
-    """Set built-in display brightness (0.0 to 1.0)."""
-    try:
-        swift_code = f"""
-import Foundation
-import CoreGraphics
-let h = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_NOW)
-typealias SB = @convention(c) (CGDirectDisplayID, Float) -> Int32
-let setBrightness = unsafeBitCast(dlsym(h!, "DisplayServicesSetBrightness"), to: SB.self)
-var ds = [CGDirectDisplayID](repeating: 0, count: 8)
-var dc: UInt32 = 0
-CGGetActiveDisplayList(8, &ds, &dc)
-for i in 0..<Int(dc) {{ if CGDisplayIsBuiltin(ds[i]) != 0 {{ setBrightness(ds[i], {value}) }} }}
-if h != nil {{ dlclose(h) }}
-"""
-        subprocess.run(
-            ["swift", "-e", swift_code],
-            capture_output=True, text=True, timeout=10
-        )
-    except Exception:
-        pass
-
-
 def get_displays():
     result = subprocess.run(["displayplacer", "list"], capture_output=True, text=True)
     output = result.stdout
@@ -91,6 +68,11 @@ def get_displays():
         m = re.match(r"Origin: \((-?\d+),(-?\d+)\)", stripped)
         if m:
             current["origin"] = (int(m.group(1)), int(m.group(2)))
+            continue
+
+        m = re.match(r"Enabled: (.+)", stripped)
+        if m:
+            current["enabled"] = m.group(1).strip().lower() == "true"
             continue
 
     if current and "persistent_id" in current:
@@ -123,6 +105,21 @@ def switch_primary(cmd, target_id, displays):
     return re.sub(r"origin:\((-?\d+),(-?\d+)\)", replace_origin, cmd)
 
 
+def disable_builtin(builtin_id):
+    subprocess.run(
+        ["displayplacer", f"id:{builtin_id} enabled:false"],
+        capture_output=True
+    )
+
+
+def enable_builtin(builtin_id):
+    subprocess.run(
+        ["displayplacer", f"id:{builtin_id} enabled:true"],
+        capture_output=True
+    )
+    time.sleep(1)
+
+
 def load_state():
     try:
         with open(STATE_FILE) as f:
@@ -141,7 +138,7 @@ def run_once(verbose=False, force=False):
     use_lid = lid_angle >= 0
 
     if use_lid:
-        want_builtin_main = lid_angle >= LID_ANGLE_THRESHOLD
+        want_builtin = lid_angle >= LID_ANGLE_THRESHOLD
         trigger_info = f"lid={lid_angle}°"
     else:
         brightness = get_brightness()
@@ -149,33 +146,22 @@ def run_once(verbose=False, force=False):
             if verbose:
                 print("No sensor available (lid closed?)")
             return
-        want_builtin_main = brightness > BRIGHTNESS_THRESHOLD
+        want_builtin = brightness > BRIGHTNESS_THRESHOLD
         trigger_info = f"brightness={brightness:.4f}"
 
-    displays = get_displays()
-    if len(displays) < 2:
+    state = load_state()
+    current_mode = state.get("mode", "builtin")
+
+    if want_builtin and current_mode == "builtin":
         if verbose:
-            print("Only one display connected — nothing to switch")
+            print(f"Already correct: MacBook is primary ({trigger_info})")
         return
-
-    builtin = next((d for d in displays if d.get("is_builtin")), None)
-    externals = [d for d in displays if not d.get("is_builtin")]
-
-    if not builtin or not externals:
+    if not want_builtin and current_mode == "external":
         if verbose:
-            print("Could not identify builtin/external displays")
-        return
-
-    builtin_is_main = builtin.get("origin") == (0, 0)
-
-    if want_builtin_main == builtin_is_main:
-        if verbose:
-            current = "MacBook" if builtin_is_main else "External"
-            print(f"Already correct: {current} is primary ({trigger_info})")
+            print(f"Already correct: External is primary ({trigger_info})")
         return
 
     # Cooldown
-    state = load_state()
     if not force:
         last_switch = state.get("last_switch_time", 0)
         if time.time() - last_switch < COOLDOWN_SECONDS:
@@ -183,51 +169,88 @@ def run_once(verbose=False, force=False):
                 print(f"Cooldown active, skipping ({trigger_info})")
             return
 
-    cmd = get_displayplacer_command()
-    if not cmd:
+    displays = get_displays()
+    builtin = next((d for d in displays if d.get("is_builtin")), None)
+    externals = [d for d in displays if not d.get("is_builtin")]
+
+    if not externals:
         if verbose:
-            print("Could not get displayplacer command")
+            print("No external displays connected")
         return
 
-    if want_builtin_main:
-        # Switching to MacBook as main
+    if want_builtin:
+        # --- Switch to MacBook ---
+        builtin_id = state.get("builtin_id")
+        if not builtin_id:
+            if builtin:
+                builtin_id = builtin["persistent_id"]
+            else:
+                if verbose:
+                    print("Cannot find built-in display ID")
+                return
+
+        # Re-enable built-in screen
+        if not builtin or not builtin.get("enabled", True):
+            enable_builtin(builtin_id)
+
+        # Re-read displays after enabling
+        displays = get_displays()
+        builtin = next((d for d in displays if d.get("is_builtin")), None)
+        externals = [d for d in displays if not d.get("is_builtin")]
+
+        if not builtin:
+            if verbose:
+                print("Built-in display did not re-enable")
+            return
+
+        cmd = get_displayplacer_command()
+        if cmd:
+            new_cmd = switch_primary(cmd, builtin["persistent_id"], displays)
+            if new_cmd:
+                subprocess.run(new_cmd, shell=True, capture_output=True)
+
+        subprocess.run(["killall", "Dock"], capture_output=True)
+        state["mode"] = "builtin"
+        state["last_switch_time"] = time.time()
+        save_state(state)
+        print(f"Switched → MacBook (enabled + primary) ({trigger_info})")
+
+    else:
+        # --- Switch to External ---
+        if not builtin:
+            if verbose:
+                print("Built-in display already disabled")
+            return
+
+        # Remember builtin ID for re-enabling later
+        state["builtin_id"] = builtin["persistent_id"]
+
+        # Save which external should be main
         main_external = next(
             (d for d in externals if d.get("origin") == (0, 0)), None
         )
         if main_external:
             state["last_external_main"] = main_external["persistent_id"]
+        else:
+            state["last_external_main"] = externals[0]["persistent_id"]
 
-        new_cmd = switch_primary(cmd, builtin["persistent_id"], displays)
-        target_name = "MacBook"
+        # Switch primary to external first
+        cmd = get_displayplacer_command()
+        if cmd:
+            target_id = state["last_external_main"]
+            new_cmd = switch_primary(cmd, target_id, displays)
+            if new_cmd:
+                subprocess.run(new_cmd, shell=True, capture_output=True)
+                time.sleep(0.5)
 
-        # Restore brightness if lid triggered
-        if use_lid:
-            saved = state.get("saved_brightness", 0.5)
-            set_brightness(saved)
-    else:
-        # Switching to external as main
-        target_id = state.get("last_external_main", externals[0]["persistent_id"])
-        if not any(d["persistent_id"] == target_id for d in externals):
-            target_id = externals[0]["persistent_id"]
+        # Disable built-in screen entirely
+        disable_builtin(builtin["persistent_id"])
 
-        new_cmd = switch_primary(cmd, target_id, displays)
-        target_name = "External"
-
-        # Save and zero brightness if lid triggered
-        if use_lid:
-            current_brightness = get_brightness()
-            if current_brightness > BRIGHTNESS_THRESHOLD:
-                state["saved_brightness"] = current_brightness
-            set_brightness(0.0)
-
-    if new_cmd:
-        subprocess.run(new_cmd, shell=True, capture_output=True)
         subprocess.run(["killall", "Dock"], capture_output=True)
+        state["mode"] = "external"
         state["last_switch_time"] = time.time()
         save_state(state)
-        print(f"Switched primary → {target_name} ({trigger_info})")
-    elif verbose:
-        print("No switch needed")
+        print(f"Switched → External (builtin disabled) ({trigger_info})")
 
 
 def monitor(interval=2):
