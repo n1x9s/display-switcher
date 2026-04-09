@@ -21,7 +21,7 @@ Requires macOS 14+ and an external monitor connected.
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/display-switcher.git
+git clone https://github.com/n1x9s/display-switcher.git
 cd display-switcher
 chmod +x install.sh
 ./install.sh
